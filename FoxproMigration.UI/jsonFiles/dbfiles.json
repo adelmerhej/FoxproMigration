@@ -1,0 +1,57 @@
+[
+  {
+    "name": "FPARAM.DBF",
+    "path": "C:\\byanp10\\FPARAM.DBF",
+    "type": "dbf"
+  },
+  {
+    "name": "FASOC.DBF",
+    "path": "C:\\byanp10\\FASOC.DBF",
+    "type": "dbf"
+  },
+  {
+    "name": "FCHART.DBF",
+    "path": "C:\\byanp10\\FCHART.DBF",
+    "type": "dbf"
+  },
+  {
+    "name": "FIMMOB.DBF",
+    "path": "C:\\byanp10\\FIMMOB.DBF",
+    "type": "dbf"
+  },
+  {
+    "name": "FLRAPORT.DBF",
+    "path": "C:\\byanp10\\FLRAPORT.DBF",
+    "type": "dbf"
+  },
+  {
+    "name": "FRAPDAT.DBF",
+    "path": "C:\\byanp10\\FRAPDAT.DBF",
+    "type": "dbf"
+  },
+  {
+    "name": "FRLIND.DBF",
+    "path": "C:\\byanp10\\FRLIND.DBF",
+    "type": "dbf"
+  },
+  {
+    "name": "FWSOC.DBF",
+    "path": "C:\\byanp10\\FWSOC.DBF",
+    "type": "dbf"
+  },
+  {
+    "name": "PLRAPORT.DBF",
+    "path": "C:\\byanp10\\PLRAPORT.DBF",
+    "type": "dbf"
+  },
+  {
+    "name": "RESULTS.DBF",
+    "path": "C:\\byanp10\\RESULTS.DBF",
+    "type": "dbf"
+  },
+  {
+    "name": "TEMPBC.DBF",
+    "path": "C:\\byanp10\\TEMPBC.DBF",
+    "type": "dbf"
+  }
+]
