@@ -7,7 +7,8 @@ namespace FoxproMigration.UI.Utilities
     {
         public static string GenerateSqlServerTable(string tableName, DataTable schema)
         {
-            var sql = $"CREATE TABLE {tableName} (\n";
+            var escapedTableName = EscapeSqlIdentifier(tableName);
+            var sql = $"IF OBJECT_ID(N'{escapedTableName}', N'U') IS NOT NULL\nDROP TABLE {escapedTableName};\nCREATE TABLE {escapedTableName} (\n";
 
             foreach (DataRow row in schema.Rows)
             {
@@ -17,7 +18,7 @@ namespace FoxproMigration.UI.Utilities
 
                 string sqlType = MapType(type, size);
 
-                sql += $"  [{name}] {sqlType},\n";
+                sql += $"  {EscapeSqlIdentifier(name)} {sqlType},\n";
             }
 
             sql = sql.TrimEnd(',', '\n');
@@ -29,7 +30,7 @@ namespace FoxproMigration.UI.Utilities
         static string MapType(Type type, int size)
         {
             if (type == typeof(string))
-                return $"VARCHAR({size})";
+                return size > 8000 ? "VARCHAR(MAX)" : $"VARCHAR({Math.Max(size, 1)})";
 
             if (type == typeof(int))
                 return "INT";
@@ -47,6 +48,11 @@ namespace FoxproMigration.UI.Utilities
                 return "BIT";
 
             return "VARCHAR(255)";
+        }
+
+        static string EscapeSqlIdentifier(string identifier)
+        {
+            return $"[{identifier.Replace("]", "]]" )}]";
         }
     }
 }

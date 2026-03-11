@@ -193,9 +193,72 @@ namespace FoxproMigration.UI.Main
 
         private void btnStart_Click(object sender, EventArgs e)
         {
+            CreateschemaInSql();
             MigrateDbfToSql();
             Close();
         }
+
+        private void CreateschemaInSql()
+        {
+            try
+            {
+                _connectionModel = DatabaseFactory.ConnectionParamsGet();
+
+                ApplyTextBoxValuesToSelectedRow();
+
+                var dbfFiles = dgDbfFiles.DataSource as List<DbfFileInfoModel>;
+                if (dbfFiles == null || dbfFiles.Count == 0)
+                {
+                    return;
+                }
+
+                using (SqlConnection sqlConnection = new SqlConnection(ConnectionHelper.BuildConnectionString()))
+                {
+                    sqlConnection.Open();
+
+                    foreach (var dbfFile in dbfFiles)
+                    {
+                        if (dbfFile == null)
+                        {
+                            continue;
+                        }
+
+                        string filePath = dbfFile.Path;
+                        string fileDirectory = !string.IsNullOrWhiteSpace(filePath)
+                            ? Path.GetDirectoryName(filePath)
+                            : _connectionModel.DbfFilesLocation;
+
+                        string fileName = !string.IsNullOrWhiteSpace(filePath)
+                            ? Path.GetFileName(filePath)
+                            : dbfFile.Name;
+
+                        string tableName = !string.IsNullOrWhiteSpace(dbfFile.Name)
+                            ? Path.GetFileNameWithoutExtension(dbfFile.Name)
+                            : Path.GetFileNameWithoutExtension(fileName);
+
+                        if (string.IsNullOrWhiteSpace(fileDirectory) || string.IsNullOrWhiteSpace(fileName) || string.IsNullOrWhiteSpace(tableName))
+                        {
+                            throw new InvalidOperationException("Each DBF entry must include a valid name and path.");
+                        }
+
+                        var dbfReaderRepository = new DbfReaderRepository(fileDirectory);
+                        var schema = dbfReaderRepository.GetSchema(fileName);
+                        var sql = dbfReaderRepository.GenerateSqlServerTable(tableName, schema);
+
+                        using (var cmd = new SqlCommand(sql, sqlConnection))
+                        {
+                            cmd.ExecuteNonQuery();
+                        }
+                    }
+                }
+
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Migration Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }   
+
 
         private void btnConfiguration_Click(object sender, EventArgs e)
         {
@@ -209,13 +272,10 @@ namespace FoxproMigration.UI.Main
             {
                 _connectionModel = DatabaseFactory.ConnectionParamsGet();
 
-                string sql = "";
-
                 DbfReaderRepository dbfReaderRepository = new DbfReaderRepository(_connectionModel.DbfFilesLocation);
 
-                string json = File.ReadAllText(DbFilesPath);
-
-                var dbfFiles = _serializer.Deserialize<List<DbfFileInfoModel>>(json);
+                var schema = dbfReaderRepository.GetSchema("FPARAM.DBF");
+                var sql = dbfReaderRepository.GenerateSqlServerTable("FPARAM", schema);
 
                 using (SqlConnection sqlConnection = new SqlConnection(ConnectionHelper.BuildConnectionString()))
                 {
