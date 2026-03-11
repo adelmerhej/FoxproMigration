@@ -5,9 +5,10 @@ using FoxproMigration.UI.Utilities.DatabaseConnection;
 using System;
 using System.Collections.Generic;
 using System.Data.SqlClient;
+using System.Diagnostics;
 using System.IO;
-using System.Text;
 using System.Reflection;
+using System.Text;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
@@ -31,6 +32,67 @@ namespace FoxproMigration.UI.Main
 
             CheckjsonFile();
             LoadDbfFiles();
+            ResetProgressStatus();
+        }
+
+        private void ResetProgressStatus()
+        {
+            lblProgress.Text = "Progress:";
+            lblFilesCompleted.Text = "Files Completed: 0";
+            lblRemainingFiles.Text = "Remaining Files: 0";
+            lblTimeRemaining.Text = "Time Remaining: 00:00:00";
+            progressBar.Minimum = 0;
+            progressBar.Maximum = 1;
+            progressBar.Value = 0;
+        }
+
+        private void InitializeProgressStatus(string phaseName, int totalFiles)
+        {
+            lblProgress.Text = "Progress: " + phaseName;
+            lblFilesCompleted.Text = "Files Completed: 0/" + totalFiles;
+            lblRemainingFiles.Text = "Remaining Files: " + totalFiles;
+            lblTimeRemaining.Text = totalFiles > 0
+                ? "Time Remaining: calculating..."
+                : "Time Remaining: 00:00:00";
+
+            progressBar.Minimum = 0;
+            progressBar.Maximum = totalFiles > 0 ? totalFiles : 1;
+            progressBar.Value = 0;
+
+            RefreshProgressStatus();
+        }
+
+        private void UpdateProgressStatus(string phaseName, int completedFiles, int totalFiles, Stopwatch stopwatch)
+        {
+            int remainingFiles = Math.Max(totalFiles - completedFiles, 0);
+
+            lblProgress.Text = "Progress: " + phaseName;
+            lblFilesCompleted.Text = "Files Completed: " + completedFiles + "/" + totalFiles;
+            lblRemainingFiles.Text = "Remaining Files: " + remainingFiles;
+            progressBar.Value = Math.Min(completedFiles, progressBar.Maximum);
+
+            if (completedFiles > 0 && remainingFiles > 0)
+            {
+                long averageTicksPerFile = stopwatch.ElapsedTicks / completedFiles;
+                var remainingTime = new TimeSpan(averageTicksPerFile * remainingFiles);
+                lblTimeRemaining.Text = "Time Remaining: " + remainingTime.ToString(@"hh\:mm\:ss");
+            }
+            else
+            {
+                lblTimeRemaining.Text = "Time Remaining: 00:00:00";
+            }
+
+            RefreshProgressStatus();
+        }
+
+        private void RefreshProgressStatus()
+        {
+            lblProgress.Refresh();
+            lblFilesCompleted.Refresh();
+            lblRemainingFiles.Refresh();
+            lblTimeRemaining.Refresh();
+            progressBar.Refresh();
+            Application.DoEvents();
         }
 
         private void CheckjsonFile()
@@ -209,17 +271,24 @@ namespace FoxproMigration.UI.Main
                 var dbfFiles = dgDbfFiles.DataSource as List<DbfFileInfoModel>;
                 if (dbfFiles == null || dbfFiles.Count == 0)
                 {
+                    ResetProgressStatus();
                     return;
                 }
+
+                InitializeProgressStatus("Creating schema", dbfFiles.Count);
+                var stopwatch = Stopwatch.StartNew();
 
                 using (SqlConnection sqlConnection = new SqlConnection(ConnectionHelper.BuildConnectionString()))
                 {
                     sqlConnection.Open();
 
-                    foreach (var dbfFile in dbfFiles)
+                    for (int index = 0; index < dbfFiles.Count; index++)
                     {
+                        var dbfFile = dbfFiles[index];
+
                         if (dbfFile == null)
                         {
+                            UpdateProgressStatus("Creating schema", index + 1, dbfFiles.Count, stopwatch);
                             continue;
                         }
 
@@ -249,6 +318,8 @@ namespace FoxproMigration.UI.Main
                         {
                             cmd.ExecuteNonQuery();
                         }
+
+                        UpdateProgressStatus("Creating schema", index + 1, dbfFiles.Count, stopwatch);
                     }
                 }
 
@@ -257,7 +328,7 @@ namespace FoxproMigration.UI.Main
             {
                 MessageBox.Show(this, ex.Message, "Migration Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
-        }   
+        }
 
 
         private void btnConfiguration_Click(object sender, EventArgs e)
@@ -272,17 +343,63 @@ namespace FoxproMigration.UI.Main
             {
                 _connectionModel = DatabaseFactory.ConnectionParamsGet();
 
-                DbfReaderRepository dbfReaderRepository = new DbfReaderRepository(_connectionModel.DbfFilesLocation);
-
-                var schema = dbfReaderRepository.GetSchema("FPARAM.DBF");
-                var sql = dbfReaderRepository.GenerateSqlServerTable("FPARAM", schema);
-
                 using (SqlConnection sqlConnection = new SqlConnection(ConnectionHelper.BuildConnectionString()))
                 {
                     sqlConnection.Open();
 
-                    var cmd = new SqlCommand(sql, sqlConnection);
-                    cmd.ExecuteNonQuery();
+                    var dbfFiles = dgDbfFiles.DataSource as List<DbfFileInfoModel>;
+                    if (dbfFiles == null || dbfFiles.Count == 0)
+                    {
+                        ResetProgressStatus();
+                        return;
+                    }
+
+                    InitializeProgressStatus("Migrating data", dbfFiles.Count);
+                    var stopwatch = Stopwatch.StartNew();
+
+                    for (int index = 0; index < dbfFiles.Count; index++)
+                    {
+                        var dbfFile = dbfFiles[index];
+
+                        if (dbfFile == null)
+                        {
+                            UpdateProgressStatus("Migrating data", index + 1, dbfFiles.Count, stopwatch);
+                            continue;
+                        }
+
+                        string filePath = dbfFile.Path;
+                        string fileDirectory = !string.IsNullOrWhiteSpace(filePath)
+                            ? Path.GetDirectoryName(filePath)
+                            : _connectionModel.DbfFilesLocation;
+
+                        string fileName = !string.IsNullOrWhiteSpace(filePath)
+                            ? Path.GetFileName(filePath)
+                            : dbfFile.Name;
+
+                        string tableName = !string.IsNullOrWhiteSpace(dbfFile.Name)
+                            ? Path.GetFileNameWithoutExtension(dbfFile.Name)
+                            : Path.GetFileNameWithoutExtension(fileName);
+
+                        if (string.IsNullOrWhiteSpace(fileDirectory) || string.IsNullOrWhiteSpace(fileName) || string.IsNullOrWhiteSpace(tableName))
+                        {
+                            throw new InvalidOperationException("Each DBF entry must include a valid name and path.");
+                        }
+
+                        var dbfReaderRepository = new DbfReaderRepository(fileDirectory);
+
+                        var dataTable = dbfReaderRepository.ReadTable(tableName, "");
+                        using (var bulk = new SqlBulkCopy(sqlConnection))
+                        {
+                            bulk.DestinationTableName = tableName;
+                            bulk.WriteToServer(dataTable);
+                        }
+
+                        UpdateProgressStatus("Migrating data", index + 1, dbfFiles.Count, stopwatch);
+
+                    }
+
+                    //var cmd = new SqlCommand(sql, sqlConnection);
+                    //cmd.ExecuteNonQuery();
                 }
 
             }
