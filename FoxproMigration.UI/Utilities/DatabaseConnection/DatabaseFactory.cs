@@ -2,10 +2,6 @@
 using FoxproMigration.UI.Properties;
 using FoxproMigration.UI.Utilities.DataAccess;
 using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using static FoxproMigration.UI.Utilities.EnumsLibrary;
 
 namespace FoxproMigration.UI.Utilities.DatabaseConnection
@@ -54,6 +50,7 @@ namespace FoxproMigration.UI.Utilities.DatabaseConnection
         public static void ConnectionParamsSet(ConnectionModel connection)
         {
             Settings.Default.DatabaseType = connection.DatabaseType;
+            Settings.Default.DbfFilesLocation = connection.DbfFilesLocation;
             Settings.Default.SqlDatabaseServer = connection.SqlDatabaseServer;
             Settings.Default.SqlDatabasePort = connection.SqlDatabasePort;
             Settings.Default.SqlDatabaseName = connection.SqlDatabaseName;
@@ -68,6 +65,7 @@ namespace FoxproMigration.UI.Utilities.DatabaseConnection
             ConnectionModel connection = new ConnectionModel();
 
             connection.DatabaseType = Settings.Default.DatabaseType;
+            connection.DbfFilesLocation = Settings.Default.DbfFilesLocation;
             connection.SqlDatabaseServer = Settings.Default.SqlDatabaseServer;
             connection.SqlDatabasePort = Settings.Default.SqlDatabasePort;
             connection.SqlDatabaseName = Settings.Default.SqlDatabaseName;

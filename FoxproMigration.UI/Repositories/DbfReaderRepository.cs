@@ -1,5 +1,4 @@
-﻿using System;
-using System.Data;
+﻿using System.Data;
 using System.Data.Odbc;
 
 namespace FoxproMigration.UI.Repositories
@@ -15,7 +14,7 @@ namespace FoxproMigration.UI.Repositories
 
         public DataTable ReadTable(string table, string filter)
         {
-            using (var connection = new OdbcConnection(conn)) 
+            using (var connection = new OdbcConnection(conn))
             {
                 connection.Open();
 

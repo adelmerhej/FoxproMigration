@@ -1,77 +1,28 @@
 ﻿using FoxproMigration.UI.Models;
+using FoxproMigration.UI.Utilities;
+using FoxproMigration.UI.Utilities.DatabaseConnection;
 using System;
-using System.Collections.Generic;
+using System.Data.SqlClient;
 using System.IO;
-using System.Reflection;
-using System.Text;
-using System.Web.Script.Serialization;
 using System.Windows.Forms;
-using System.Xml.Linq;
 
 namespace FoxproMigration.UI.Main.Configuration
 {
     public partial class FilesConfigurationForm : Form
     {
-        private const string EmbeddedResourceName = "FoxproMigration.UI.jsonFiles.dbfiles.json";
-
-        private static readonly string DbFilesPath =
-            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "jsonFiles", "dbfiles.json");
-
-        private readonly JavaScriptSerializer _serializer = new JavaScriptSerializer();
+        private ConnectionModel _connectionModel = new ConnectionModel();
 
         public FilesConfigurationForm()
         {
             InitializeComponent();
 
-            dgDbfFiles.SelectionChanged += dgDbfFiles_SelectionChanged;
-
-            LoadDbfFiles();
+            ConnectionParams();
+            LoadSavedConfiguration();
         }
 
-        private void LoadDbfFiles()
+        private void ConnectionParams()
         {
-            string json = File.ReadAllText(DbFilesPath);
-            var dbfFiles = _serializer.Deserialize<List<DbfFileInfoModel>>(json);
-
-            dgDbfFiles.DataSource = dbfFiles;
-        }
-
-        private void dgDbfFiles_SelectionChanged(object sender, EventArgs e)
-        {
-            if (dgDbfFiles.CurrentRow == null)
-            {
-                return;
-            }
-
-            var dbfFiles = dgDbfFiles.DataSource as List<DbfFileInfoModel>;
-            if (dbfFiles == null || dgDbfFiles.CurrentRow.Index < 0 || dgDbfFiles.CurrentRow.Index >= dbfFiles.Count)
-            {
-                return;
-            }
-
-            var selected = dbfFiles[dgDbfFiles.CurrentRow.Index];
-            txtFileName.Text = selected.Name ?? string.Empty;
-            txtFilePath.Text = selected.Path ?? string.Empty;
-            txtFileType.Text = selected.Type ?? string.Empty;
-        }
-
-        private void ApplyTextBoxValuesToSelectedRow()
-        {
-            if (dgDbfFiles.CurrentRow == null)
-            {
-                return;
-            }
-
-            var dbfFiles = dgDbfFiles.DataSource as List<DbfFileInfoModel>;
-            if (dbfFiles == null || dgDbfFiles.CurrentRow.Index < 0 || dgDbfFiles.CurrentRow.Index >= dbfFiles.Count)
-            {
-                return;
-            }
-
-            var selected = dbfFiles[dgDbfFiles.CurrentRow.Index];
-            selected.Name = txtFileName.Text;
-            selected.Path = txtFilePath.Text;
-            selected.Type = txtFileType.Text;
+            _connectionModel = DatabaseFactory.ConnectionParamsGet();
         }
 
         private void btnCancel_Click(object sender, EventArgs e)
@@ -81,142 +32,100 @@ namespace FoxproMigration.UI.Main.Configuration
 
         private void btnSave_Click(object sender, EventArgs e)
         {
-            if (!ValidateSave()) return;
-
-            ApplyTextBoxValuesToSelectedRow();
-
-            var dbfFiles = dgDbfFiles.DataSource as List<DbfFileInfoModel>;
-            if (dbfFiles == null)
-            {
-                return;
-            }
-
-            string json = _serializer.Serialize(dbfFiles);
-            string directory = Path.GetDirectoryName(DbFilesPath);
-            if (!Directory.Exists(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            File.WriteAllText(DbFilesPath, json);
-            MessageBox.Show(this, "Configuration saved.", "Save",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
-
+            SaveConfiguration();
             Close();
         }
 
-        private bool ValidateSave()
+        private void LoadSavedConfiguration()
         {
-            var validateReturnValue = true;
-            var messageNumber = 0;
-            var validateMessage = new StringBuilder();
-
-            if (txtFileName.Text == "")
+            txtDbfFilesLocation.Text = _connectionModel.DbfFilesLocation;
+            //cboDatabaseType.EditValue = _connectionModel.DatabaseType;
+            txtSQLDatabaseServer.Text = _connectionModel.SqlDatabaseServer;
+            txtDatabasePort.Text = _connectionModel.SqlDatabasePort.ToString();
+            txtDatabaseName.Text = _connectionModel.SqlDatabaseName;
+            txtDatabaseUsername.Text = _connectionModel.SqlDatabaseUsername;
+    
+            try
             {
-                messageNumber += 1;
-                validateMessage.Append("\n- File Name cannot be empty.");
-                validateReturnValue = false;
-                txtFileName.Focus();
+                txtDatabasePassword.Text = string.IsNullOrEmpty(_connectionModel.SqlDatabasePassword)
+                    ? string.Empty
+                    : SystemUtilities.Base64Decode(_connectionModel.SqlDatabasePassword);
             }
-
-            if (txtFilePath.Text == "")
+            catch (FormatException)
             {
-                messageNumber += 1;
-                validateMessage.Append("\n- File Path cannot be empty.");
-                validateReturnValue = false;
-                txtFilePath.Focus();
+                txtDatabasePassword.Text = _connectionModel.SqlDatabasePassword;
             }
-
-            if (txtFileType.Text == "")
-            {
-                messageNumber += 1;
-                validateMessage.Append("\n- File Type cannot be empty.");
-                validateReturnValue = false;
-                txtFileType.Focus();
-            }
-
-            if (!validateReturnValue)
-            {
-                validateMessage.Insert(0, "The following need your attention:");
-                if (messageNumber > 1) validateMessage.Replace("following", "followings");
-                MessageBox.Show(validateMessage + " \nPlease try again.",
-                    "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
-            }
-
-            return validateReturnValue;
         }
 
-
-        private void btnBrowseFile_Click(object sender, EventArgs e)
+        private void SaveConfiguration()
         {
-            using (var openFileDialog = new OpenFileDialog())
-            {
-                openFileDialog.Filter = "All Files (*.*)|*.*";
-                openFileDialog.Title = "Select a file";
+            _connectionModel.DatabaseType = "Sql";
+            _connectionModel.DbfFilesLocation = txtDbfFilesLocation.Text;
+            _connectionModel.SqlDatabaseServer = txtSQLDatabaseServer.Text.Trim();
+            int.TryParse(txtDatabasePort.Text, out var result);
+            _connectionModel.SqlDatabasePort = result;
+            _connectionModel.SqlDatabaseName = txtDatabaseName.Text.Trim();
+            _connectionModel.SqlDatabaseUsername = txtDatabaseUsername.Text;
+            _connectionModel.SqlDatabasePassword = SystemUtilities.Base64Encode(txtDatabasePassword.Text);
 
-                if (openFileDialog.ShowDialog(this) == DialogResult.OK)
+            DatabaseFactory.ConnectionParamsSet(_connectionModel);
+        }
+
+        private void btnBrowseFolder_Click(object sender, EventArgs e)
+        {
+            using (FolderBrowserDialog folderBrowserDialog = new FolderBrowserDialog())
+            {
+                if (!string.IsNullOrWhiteSpace(txtDbfFilesLocation.Text) && Directory.Exists(txtDbfFilesLocation.Text))
                 {
-                    txtFilePath.Text = openFileDialog.FileName;
-                    txtFileName.Text = Path.GetFileNameWithoutExtension(openFileDialog.FileName);
-                    txtFileType.Text = Path.GetExtension(openFileDialog.FileName).TrimStart('.');
+                    folderBrowserDialog.SelectedPath = txtDbfFilesLocation.Text;
+                }
+
+                if (folderBrowserDialog.ShowDialog(this) == DialogResult.OK)
+                {
+                    txtDbfFilesLocation.Text = Path.GetFullPath(folderBrowserDialog.SelectedPath);
                 }
             }
         }
 
-        private void btnDelete_Click(object sender, EventArgs e)
+        private void btnShowHidePassword_Click(object sender, EventArgs e)
         {
-            if (dgDbfFiles.CurrentRow == null)
-            {
-                return;
-            }
-            var dbfFiles = dgDbfFiles.DataSource as List<DbfFileInfoModel>;
-            if (dbfFiles == null || dgDbfFiles.CurrentRow.Index < 0 || dgDbfFiles.CurrentRow.Index >= dbfFiles.Count)
-            {
-                return;
-            }
-            var selected = dbfFiles[dgDbfFiles.CurrentRow.Index];
-            var confirmResult = MessageBox.Show(this,
-                $"Are you sure you want to delete '{selected.Name}'?",
-                "Confirm Delete", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
-            if (confirmResult == DialogResult.Yes)
-            {
-                dbfFiles.RemoveAt(dgDbfFiles.CurrentRow.Index);
-                // Rebind to update the grid
-                dgDbfFiles.DataSource = null;
-                dgDbfFiles.DataSource = dbfFiles;
-                // Clear text boxes
-                txtFileName.Text = string.Empty;
-                txtFilePath.Text = string.Empty;
-                txtFileType.Text = string.Empty;
-            }
+            txtDatabasePassword.PasswordChar = (txtDatabasePassword.PasswordChar == '*') ? '\0' : '*';
+            btnShowHidePassword.ImageIndex = 0;
         }
 
-        private void btnAddNew_Click(object sender, EventArgs e)
+        private void btnShowHidePassword_MouseLeave(object sender, EventArgs e)
         {
-            var dbfFiles = dgDbfFiles.DataSource as List<DbfFileInfoModel>;
-            if (dbfFiles == null)
+            txtDatabasePassword.PasswordChar = txtDatabasePassword.PasswordChar = '*';
+            btnShowHidePassword.ImageIndex = 1;
+        }
+
+        private void btnTestConnection_Click(object sender, EventArgs e)
+        {
+            SqlConnectionStringBuilder sqlConnectionStringBuilder = new SqlConnectionStringBuilder
             {
-                dbfFiles = new List<DbfFileInfoModel>();
+                DataSource = string.IsNullOrWhiteSpace(txtDatabasePort.Text)
+                    ? txtSQLDatabaseServer.Text.Trim()
+                    : string.Format("{0},{1}", txtSQLDatabaseServer.Text.Trim(), txtDatabasePort.Text.Trim()),
+                InitialCatalog = txtDatabaseName.Text.Trim(),
+                UserID = txtDatabaseUsername.Text.Trim(),
+                Password = txtDatabasePassword.Text,
+                IntegratedSecurity = false,
+                ConnectTimeout = 5
+            };
+
+            try
+            {
+                using (SqlConnection sqlConnection = new SqlConnection(sqlConnectionStringBuilder.ConnectionString))
+                {
+                    sqlConnection.Open();
+                }
+
+                MessageBox.Show(this, "SQL connection successful.", "Connection Test", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
-
-            var newFile = new DbfFileInfoModel();
-
-            dbfFiles.Add(newFile);
-
-            // Rebind so the grid picks up the new row
-            dgDbfFiles.DataSource = null;
-            dgDbfFiles.DataSource = dbfFiles;
-
-            // Select the newly added row
-            dgDbfFiles.ClearSelection();
-            int lastRowIndex = dgDbfFiles.Rows.Count - 1;
-            dgDbfFiles.Rows[lastRowIndex].Selected = true;
-            dgDbfFiles.CurrentCell = dgDbfFiles.Rows[lastRowIndex].Cells[0];
-
-            var selected = dbfFiles[dgDbfFiles.CurrentRow.Index];
-            txtFileName.Text = selected.Name ?? string.Empty;
-            txtFilePath.Text = selected.Path ?? string.Empty;
-            txtFileType.Text = selected.Type ?? string.Empty;
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Connection Test Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
     }
 }

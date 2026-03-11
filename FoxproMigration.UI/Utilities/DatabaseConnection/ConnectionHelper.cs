@@ -14,8 +14,10 @@ namespace FoxproMigration.UI.Utilities.DatabaseConnection
         {
             _connectionModel = DatabaseFactory.ConnectionParamsGet();
 
+            var password = SystemUtilities.Base64Decode(_connectionModel.SqlDatabasePassword);
+
             string connectionString = string.Concat("Server=", _connectionModel.SqlDatabaseServer, ";" +
-                "User Id=", _connectionModel.SqlDatabaseUsername, ";Password=", _connectionModel.SqlDatabasePassword);
+                "User Id=", _connectionModel.SqlDatabaseUsername, ";Password=", password);
 
             if (includeDatabaseName)
             {

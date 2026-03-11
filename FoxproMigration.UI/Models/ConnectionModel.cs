@@ -2,6 +2,7 @@
 {
     public class ConnectionModel
     {
+        public string DbfFilesLocation { get; set; }
         public string DatabaseType { get; set; }
         public string SqlDatabaseServer { get; set; }
         public int SqlDatabasePort { get; set; }
