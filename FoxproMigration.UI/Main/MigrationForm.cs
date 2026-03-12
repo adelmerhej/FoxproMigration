@@ -9,6 +9,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Text;
+using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
@@ -16,7 +17,17 @@ namespace FoxproMigration.UI.Main
 {
     public partial class MigrationForm : Form
     {
+        private sealed class MigrationProgressInfo
+        {
+            public string PhaseName { get; set; }
+            public int CompletedFiles { get; set; }
+            public int TotalFiles { get; set; }
+            public long ElapsedTicks { get; set; }
+            public bool IsInitialization { get; set; }
+        }
+
         private ConnectionModel _connectionModel = new ConnectionModel();
+        private bool _isMigrating;
 
         private const string EmbeddedResourceName = "FoxproMigration.UI.jsonFiles.dbfiles.json";
         private static readonly string DbFilesPath =
@@ -41,6 +52,7 @@ namespace FoxproMigration.UI.Main
             lblFilesCompleted.Text = "Files Completed: 0";
             lblRemainingFiles.Text = "Remaining Files: 0";
             lblTimeRemaining.Text = "Time Remaining: 00:00:00";
+            progressBar.Style = ProgressBarStyle.Continuous;
             progressBar.Minimum = 0;
             progressBar.Maximum = 1;
             progressBar.Value = 0;
@@ -55,6 +67,7 @@ namespace FoxproMigration.UI.Main
                 ? "Time Remaining: calculating..."
                 : "Time Remaining: 00:00:00";
 
+            progressBar.Style = ProgressBarStyle.Continuous;
             progressBar.Minimum = 0;
             progressBar.Maximum = totalFiles > 0 ? totalFiles : 1;
             progressBar.Value = 0;
@@ -62,7 +75,7 @@ namespace FoxproMigration.UI.Main
             RefreshProgressStatus();
         }
 
-        private void UpdateProgressStatus(string phaseName, int completedFiles, int totalFiles, Stopwatch stopwatch)
+        private void UpdateProgressStatus(string phaseName, int completedFiles, int totalFiles, long elapsedTicks)
         {
             int remainingFiles = Math.Max(totalFiles - completedFiles, 0);
 
@@ -73,8 +86,8 @@ namespace FoxproMigration.UI.Main
 
             if (completedFiles > 0 && remainingFiles > 0)
             {
-                long averageTicksPerFile = stopwatch.ElapsedTicks / completedFiles;
-                var remainingTime = new TimeSpan(averageTicksPerFile * remainingFiles);
+                long averageTicksPerFile = elapsedTicks / completedFiles;
+                var remainingTime = TimeSpan.FromTicks(averageTicksPerFile * remainingFiles);
                 lblTimeRemaining.Text = "Time Remaining: " + remainingTime.ToString(@"hh\:mm\:ss");
             }
             else
@@ -92,7 +105,78 @@ namespace FoxproMigration.UI.Main
             lblRemainingFiles.Refresh();
             lblTimeRemaining.Refresh();
             progressBar.Refresh();
-            Application.DoEvents();
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (_isMigrating)
+            {
+                e.Cancel = true;
+                return;
+            }
+
+            base.OnFormClosing(e);
+        }
+
+        private void SetMigrationControlsEnabled(bool enabled)
+        {
+            btnStart.Enabled = enabled;
+            btnCancel.Enabled = enabled;
+            btnSave.Enabled = enabled;
+            btnAddNew.Enabled = enabled;
+            btnDelete.Enabled = enabled;
+            btnBrowseFile.Enabled = enabled;
+            btnConfiguration.Enabled = enabled;
+            dgDbfFiles.Enabled = enabled;
+            txtFileName.ReadOnly = !enabled;
+            txtFilePath.ReadOnly = !enabled;
+            txtFileType.ReadOnly = !enabled;
+            ControlBox = enabled;
+            UseWaitCursor = !enabled;
+        }
+
+        private List<DbfFileInfoModel> GetDbfFilesSnapshot()
+        {
+            var dbfFiles = dgDbfFiles.DataSource as List<DbfFileInfoModel>;
+            if (dbfFiles == null)
+            {
+                return new List<DbfFileInfoModel>();
+            }
+
+            var snapshot = new List<DbfFileInfoModel>(dbfFiles.Count);
+            foreach (var dbfFile in dbfFiles)
+            {
+                if (dbfFile == null)
+                {
+                    snapshot.Add(null);
+                    continue;
+                }
+
+                snapshot.Add(new DbfFileInfoModel
+                {
+                    Name = dbfFile.Name,
+                    Path = dbfFile.Path,
+                    Type = dbfFile.Type
+                });
+            }
+
+            return snapshot;
+        }
+
+        private void ReportMigrationProgress(MigrationProgressInfo progressInfo)
+        {
+            if (progressInfo == null)
+            {
+                return;
+            }
+
+            if (progressInfo.IsInitialization)
+            {
+                InitializeProgressStatus(progressInfo.PhaseName, progressInfo.TotalFiles);
+                return;
+            }
+
+            UpdateProgressStatus(progressInfo.PhaseName, progressInfo.CompletedFiles, progressInfo.TotalFiles, progressInfo.ElapsedTicks);
         }
 
         private void CheckjsonFile()
@@ -253,80 +337,122 @@ namespace FoxproMigration.UI.Main
             Close();
         }
 
-        private void btnStart_Click(object sender, EventArgs e)
+        private async void btnStart_Click(object sender, EventArgs e)
         {
-            CreateschemaInSql();
-            MigrateDbfToSql();
-            Close();
-        }
+            bool shouldClose = false;
 
-        private void CreateschemaInSql()
-        {
             try
             {
-                _connectionModel = DatabaseFactory.ConnectionParamsGet();
-
                 ApplyTextBoxValuesToSelectedRow();
 
-                var dbfFiles = dgDbfFiles.DataSource as List<DbfFileInfoModel>;
-                if (dbfFiles == null || dbfFiles.Count == 0)
+                var dbfFiles = GetDbfFilesSnapshot();
+                if (dbfFiles.Count == 0)
                 {
                     ResetProgressStatus();
                     return;
                 }
 
-                InitializeProgressStatus("Creating schema", dbfFiles.Count);
-                var stopwatch = Stopwatch.StartNew();
+                _connectionModel = DatabaseFactory.ConnectionParamsGet();
+                _isMigrating = true;
+                SetMigrationControlsEnabled(false);
 
-                using (SqlConnection sqlConnection = new SqlConnection(ConnectionHelper.BuildConnectionString()))
+                var progress = new Progress<MigrationProgressInfo>(ReportMigrationProgress);
+
+                await Task.Run(() =>
                 {
-                    sqlConnection.Open();
+                    CreateSchemaInSql(dbfFiles, _connectionModel, progress);
+                    MigrateDbfToSql(dbfFiles, _connectionModel, progress);
+                });
 
-                    for (int index = 0; index < dbfFiles.Count; index++)
-                    {
-                        var dbfFile = dbfFiles[index];
-
-                        if (dbfFile == null)
-                        {
-                            UpdateProgressStatus("Creating schema", index + 1, dbfFiles.Count, stopwatch);
-                            continue;
-                        }
-
-                        string filePath = dbfFile.Path;
-                        string fileDirectory = !string.IsNullOrWhiteSpace(filePath)
-                            ? Path.GetDirectoryName(filePath)
-                            : _connectionModel.DbfFilesLocation;
-
-                        string fileName = !string.IsNullOrWhiteSpace(filePath)
-                            ? Path.GetFileName(filePath)
-                            : dbfFile.Name;
-
-                        string tableName = !string.IsNullOrWhiteSpace(dbfFile.Name)
-                            ? Path.GetFileNameWithoutExtension(dbfFile.Name)
-                            : Path.GetFileNameWithoutExtension(fileName);
-
-                        if (string.IsNullOrWhiteSpace(fileDirectory) || string.IsNullOrWhiteSpace(fileName) || string.IsNullOrWhiteSpace(tableName))
-                        {
-                            throw new InvalidOperationException("Each DBF entry must include a valid name and path.");
-                        }
-
-                        var dbfReaderRepository = new DbfReaderRepository(fileDirectory);
-                        var schema = dbfReaderRepository.GetSchema(fileName);
-                        var sql = dbfReaderRepository.GenerateSqlServerTable(tableName, schema);
-
-                        using (var cmd = new SqlCommand(sql, sqlConnection))
-                        {
-                            cmd.ExecuteNonQuery();
-                        }
-
-                        UpdateProgressStatus("Creating schema", index + 1, dbfFiles.Count, stopwatch);
-                    }
-                }
-
+                shouldClose = false;
             }
             catch (Exception ex)
             {
                 MessageBox.Show(this, ex.Message, "Migration Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                _isMigrating = false;
+
+                if (!shouldClose && !IsDisposed)
+                {
+                    SetMigrationControlsEnabled(true);
+                }
+            }
+
+            if (shouldClose)
+            {
+                Close();
+            }
+            btnCancel.Text = "Close";
+        }
+
+        private void CreateSchemaInSql(List<DbfFileInfoModel> dbfFiles, ConnectionModel connectionModel, IProgress<MigrationProgressInfo> progress)
+        {
+            progress.Report(new MigrationProgressInfo
+            {
+                PhaseName = "Creating schema",
+                TotalFiles = dbfFiles.Count,
+                IsInitialization = true
+            });
+
+            var stopwatch = Stopwatch.StartNew();
+
+            using (SqlConnection sqlConnection = new SqlConnection(ConnectionHelper.BuildConnectionString()))
+            {
+                sqlConnection.Open();
+
+                for (int index = 0; index < dbfFiles.Count; index++)
+                {
+                    var dbfFile = dbfFiles[index];
+
+                    if (dbfFile == null)
+                    {
+                        progress.Report(new MigrationProgressInfo
+                        {
+                            PhaseName = "Creating schema",
+                            CompletedFiles = index + 1,
+                            TotalFiles = dbfFiles.Count,
+                            ElapsedTicks = stopwatch.ElapsedTicks
+                        });
+                        continue;
+                    }
+
+                    string filePath = dbfFile.Path;
+                    string fileDirectory = !string.IsNullOrWhiteSpace(filePath)
+                        ? Path.GetDirectoryName(filePath)
+                        : connectionModel.DbfFilesLocation;
+
+                    string fileName = !string.IsNullOrWhiteSpace(filePath)
+                        ? Path.GetFileName(filePath)
+                        : dbfFile.Name;
+
+                    string tableName = !string.IsNullOrWhiteSpace(dbfFile.Name)
+                        ? Path.GetFileNameWithoutExtension(dbfFile.Name)
+                        : Path.GetFileNameWithoutExtension(fileName);
+
+                    if (string.IsNullOrWhiteSpace(fileDirectory) || string.IsNullOrWhiteSpace(fileName) || string.IsNullOrWhiteSpace(tableName))
+                    {
+                        throw new InvalidOperationException("Each DBF entry must include a valid name and path.");
+                    }
+
+                    var dbfReaderRepository = new DbfReaderRepository(fileDirectory);
+                    var schema = dbfReaderRepository.GetSchema(fileName);
+                    var sql = dbfReaderRepository.GenerateSqlServerTable(tableName, schema);
+
+                    using (var cmd = new SqlCommand(sql, sqlConnection))
+                    {
+                        cmd.ExecuteNonQuery();
+                    }
+
+                    progress.Report(new MigrationProgressInfo
+                    {
+                        PhaseName = "Creating schema",
+                        CompletedFiles = index + 1,
+                        TotalFiles = dbfFiles.Count,
+                        ElapsedTicks = stopwatch.ElapsedTicks
+                    });
+                }
             }
         }
 
@@ -337,75 +463,72 @@ namespace FoxproMigration.UI.Main
             filesConfigurationForm.ShowDialog();
         }
 
-        private void MigrateDbfToSql()
+        private void MigrateDbfToSql(List<DbfFileInfoModel> dbfFiles, ConnectionModel connectionModel, IProgress<MigrationProgressInfo> progress)
         {
-            try
+            using (SqlConnection sqlConnection = new SqlConnection(ConnectionHelper.BuildConnectionString()))
             {
-                _connectionModel = DatabaseFactory.ConnectionParamsGet();
+                sqlConnection.Open();
 
-                using (SqlConnection sqlConnection = new SqlConnection(ConnectionHelper.BuildConnectionString()))
+                progress.Report(new MigrationProgressInfo
                 {
-                    sqlConnection.Open();
+                    PhaseName = "Migrating data",
+                    TotalFiles = dbfFiles.Count,
+                    IsInitialization = true
+                });
 
-                    var dbfFiles = dgDbfFiles.DataSource as List<DbfFileInfoModel>;
-                    if (dbfFiles == null || dbfFiles.Count == 0)
+                var stopwatch = Stopwatch.StartNew();
+
+                for (int index = 0; index < dbfFiles.Count; index++)
+                {
+                    var dbfFile = dbfFiles[index];
+
+                    if (dbfFile == null)
                     {
-                        ResetProgressStatus();
-                        return;
+                        progress.Report(new MigrationProgressInfo
+                        {
+                            PhaseName = "Migrating data",
+                            CompletedFiles = index + 1,
+                            TotalFiles = dbfFiles.Count,
+                            ElapsedTicks = stopwatch.ElapsedTicks
+                        });
+                        continue;
                     }
 
-                    InitializeProgressStatus("Migrating data", dbfFiles.Count);
-                    var stopwatch = Stopwatch.StartNew();
+                    string filePath = dbfFile.Path;
+                    string fileDirectory = !string.IsNullOrWhiteSpace(filePath)
+                        ? Path.GetDirectoryName(filePath)
+                        : connectionModel.DbfFilesLocation;
 
-                    for (int index = 0; index < dbfFiles.Count; index++)
+                    string fileName = !string.IsNullOrWhiteSpace(filePath)
+                        ? Path.GetFileName(filePath)
+                        : dbfFile.Name;
+
+                    string tableName = !string.IsNullOrWhiteSpace(dbfFile.Name)
+                        ? Path.GetFileNameWithoutExtension(dbfFile.Name)
+                        : Path.GetFileNameWithoutExtension(fileName);
+
+                    if (string.IsNullOrWhiteSpace(fileDirectory) || string.IsNullOrWhiteSpace(fileName) || string.IsNullOrWhiteSpace(tableName))
                     {
-                        var dbfFile = dbfFiles[index];
-
-                        if (dbfFile == null)
-                        {
-                            UpdateProgressStatus("Migrating data", index + 1, dbfFiles.Count, stopwatch);
-                            continue;
-                        }
-
-                        string filePath = dbfFile.Path;
-                        string fileDirectory = !string.IsNullOrWhiteSpace(filePath)
-                            ? Path.GetDirectoryName(filePath)
-                            : _connectionModel.DbfFilesLocation;
-
-                        string fileName = !string.IsNullOrWhiteSpace(filePath)
-                            ? Path.GetFileName(filePath)
-                            : dbfFile.Name;
-
-                        string tableName = !string.IsNullOrWhiteSpace(dbfFile.Name)
-                            ? Path.GetFileNameWithoutExtension(dbfFile.Name)
-                            : Path.GetFileNameWithoutExtension(fileName);
-
-                        if (string.IsNullOrWhiteSpace(fileDirectory) || string.IsNullOrWhiteSpace(fileName) || string.IsNullOrWhiteSpace(tableName))
-                        {
-                            throw new InvalidOperationException("Each DBF entry must include a valid name and path.");
-                        }
-
-                        var dbfReaderRepository = new DbfReaderRepository(fileDirectory);
-
-                        var dataTable = dbfReaderRepository.ReadTable(tableName, "");
-                        using (var bulk = new SqlBulkCopy(sqlConnection))
-                        {
-                            bulk.DestinationTableName = tableName;
-                            bulk.WriteToServer(dataTable);
-                        }
-
-                        UpdateProgressStatus("Migrating data", index + 1, dbfFiles.Count, stopwatch);
-
+                        throw new InvalidOperationException("Each DBF entry must include a valid name and path.");
                     }
 
-                    //var cmd = new SqlCommand(sql, sqlConnection);
-                    //cmd.ExecuteNonQuery();
+                    var dbfReaderRepository = new DbfReaderRepository(fileDirectory);
+
+                    var dataTable = dbfReaderRepository.ReadTable(tableName, "");
+                    using (var bulk = new SqlBulkCopy(sqlConnection))
+                    {
+                        bulk.DestinationTableName = tableName;
+                        bulk.WriteToServer(dataTable);
+                    }
+
+                    progress.Report(new MigrationProgressInfo
+                    {
+                        PhaseName = "Migrating data",
+                        CompletedFiles = index + 1,
+                        TotalFiles = dbfFiles.Count,
+                        ElapsedTicks = stopwatch.ElapsedTicks
+                    });
                 }
-
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(this, ex.Message, "Migration Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
